@@ -1,0 +1,170 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Drive Music Player</title>
+<link rel="manifest" href="manifest.json">
+<meta name="theme-color" content="#121212">
+<style>
+  :root { color-scheme: dark; }
+  * { box-sizing: border-box; }
+  body {
+    margin: 0; font-family: -apple-system, system-ui, sans-serif;
+    background: #121212; color: #eee; min-height: 100vh;
+    display: flex; flex-direction: column;
+  }
+  header { padding: 16px; border-bottom: 1px solid #2a2a2a; display:flex; justify-content:space-between; align-items:center; }
+  h1 { font-size: 18px; margin: 0; }
+  #signin { background:#1db954; color:#000; border:none; padding:8px 14px; border-radius:20px; font-weight:600; cursor:pointer; }
+  #signin:hover { background:#1ed760; }
+  main { flex: 1; overflow-y: auto; padding: 8px 0; }
+  .track { display:flex; align-items:center; gap:12px; padding:10px 16px; cursor:pointer; }
+  .track:hover, .track.active { background:#1e1e1e; }
+  .track span { flex:1; white-space:nowrap; overflow:hidden; text-overflow:ellipsis; font-size:14px; }
+  #status { padding: 16px; color:#888; font-size:14px; }
+  footer {
+    border-top:1px solid #2a2a2a; padding:12px 16px;
+    display:flex; align-items:center; gap:16px;
+    padding-bottom: calc(12px + env(safe-area-inset-bottom, 0px));
+  }
+  #nowplaying { flex:1; font-size:13px; color:#aaa; white-space:nowrap; overflow:hidden; text-overflow:ellipsis; }
+  button.ctrl { background:none; border:none; color:#eee; font-size:20px; cursor:pointer; padding:4px 8px; }
+</style>
+</head>
+<body>
+
+<header>
+  <h1>🎵 Drive Music</h1>
+  <button id="signin">Sign in with Google</button>
+</header>
+
+<div id="status">Sign in to load your audio files from Google Drive.</div>
+<main id="tracklist"></main>
+
+<footer>
+  <button class="ctrl" id="prev">⏮</button>
+  <button class="ctrl" id="playpause">▶️</button>
+  <button class="ctrl" id="next">⏭</button>
+  <div id="nowplaying">Nothing playing</div>
+</footer>
+
+<audio id="player"></audio>
+
+<script src="https://accounts.google.com/gsi/client" async defer></script>
+<script>
+// ====== CONFIGURE THIS ======
+const CLIENT_ID = "YOUR_GOOGLE_OAUTH_CLIENT_ID.apps.googleusercontent.com";
+// =============================
+
+const SCOPE = "https://www.googleapis.com/auth/drive.readonly";
+let accessToken = null;
+let tracks = [];
+let currentIndex = -1;
+let tokenClient;
+
+const statusEl = document.getElementById("status");
+const listEl = document.getElementById("tracklist");
+const player = document.getElementById("player");
+const nowPlaying = document.getElementById("nowplaying");
+const playPauseBtn = document.getElementById("playpause");
+
+window.addEventListener("load", () => {
+  tokenClient = google.accounts.oauth2.initTokenClient({
+    client_id: CLIENT_ID,
+    scope: SCOPE,
+    callback: (resp) => {
+      if (resp.error) {
+        statusEl.textContent = "Sign-in failed: " + resp.error;
+        return;
+      }
+      accessToken = resp.access_token;
+      loadTracks();
+    },
+  });
+});
+
+document.getElementById("signin").addEventListener("click", () => {
+  tokenClient.requestAccessToken();
+});
+
+async function loadTracks() {
+  statusEl.textContent = "Loading your audio files...";
+  listEl.innerHTML = "";
+  try {
+    const q = encodeURIComponent("mimeType contains 'audio/' and trashed = false");
+    const url = `https://www.googleapis.com/drive/v3/files?q=${q}&fields=files(id,name,mimeType)&pageSize=100`;
+    const res = await fetch(url, { headers: { Authorization: `Bearer ${accessToken}` } });
+    if (!res.ok) throw new Error(`Drive API error ${res.status}`);
+    const data = await res.json();
+    tracks = data.files || [];
+    if (tracks.length === 0) {
+      statusEl.textContent = "No audio files found in your Drive.";
+      return;
+    }
+    statusEl.textContent = `${tracks.length} track(s) found.`;
+    renderList();
+  } catch (err) {
+    statusEl.textContent = "Error loading tracks: " + err.message;
+  }
+}
+
+function renderList() {
+  listEl.innerHTML = "";
+  tracks.forEach((t, i) => {
+    const row = document.createElement("div");
+    row.className = "track" + (i === currentIndex ? " active" : "");
+    row.innerHTML = `<span>${escapeHtml(t.name)}</span>`;
+    row.addEventListener("click", () => playTrack(i));
+    listEl.appendChild(row);
+  });
+}
+
+function escapeHtml(s) {
+  return s.replace(/[&<>"']/g, (c) => ({ "&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;","'":"&#39;" }[c]));
+}
+
+async function playTrack(i) {
+  currentIndex = i;
+  renderList();
+  const t = tracks[i];
+  nowPlaying.textContent = "Loading: " + t.name;
+  try {
+    const res = await fetch(`https://www.googleapis.com/drive/v3/files/${t.id}?alt=media`, {
+      headers: { Authorization: `Bearer ${accessToken}` },
+    });
+    if (!res.ok) throw new Error(`fetch failed ${res.status}`);
+    const blob = await res.blob();
+    const objectUrl = URL.createObjectURL(blob);
+    player.src = objectUrl;
+    await player.play();
+    nowPlaying.textContent = t.name;
+    playPauseBtn.textContent = "⏸";
+    if ("mediaSession" in navigator) {
+      navigator.mediaSession.metadata = new MediaMetadata({ title: t.name });
+    }
+  } catch (err) {
+    nowPlaying.textContent = "Error: " + err.message;
+  }
+}
+
+playPauseBtn.addEventListener("click", () => {
+  if (player.paused) { player.play(); playPauseBtn.textContent = "⏸"; }
+  else { player.pause(); playPauseBtn.textContent = "▶️"; }
+});
+document.getElementById("next").addEventListener("click", () => {
+  if (currentIndex < tracks.length - 1) playTrack(currentIndex + 1);
+});
+document.getElementById("prev").addEventListener("click", () => {
+  if (currentIndex > 0) playTrack(currentIndex - 1);
+});
+player.addEventListener("ended", () => {
+  if (currentIndex < tracks.length - 1) playTrack(currentIndex + 1);
+});
+
+if ("serviceWorker" in navigator) {
+  navigator.serviceWorker.register("sw.js").catch(() => {});
+}
+</script>
+</body>
+</html>
