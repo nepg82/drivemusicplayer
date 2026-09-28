@@ -35,7 +35,7 @@
 <body>
 
 <header>
-  <h1>🎵 Drive Music</h1>
+  <h1><span id="reset" title="Reset app: unregister service worker, clear caches, reload" style="cursor:pointer">🎵</span> Drive Music</h1>
   <button id="signin">Sign in with Google</button>
 </header>
 <div id="status">Sign in to load your audio files from Google Drive.</div>
@@ -61,7 +61,7 @@
 <script src="https://accounts.google.com/gsi/client" async defer></script>
 <script>
 // ====== CONFIGURE THIS ======
-const CLIENT_ID = "731562365482-55ee1l0v6f8qe5n8t05v2cruqqa4h6ee.apps.googleusercontent.com";
+const CLIENT_ID = "Y731562365482-55ee1l0v6f8qe5n8t05v2cruqqa4h6ee.apps.googleusercontent.com";
 // =============================
 
 const API = "https://www.googleapis.com/drive/v3";
@@ -267,6 +267,17 @@ if ("mediaSession" in navigator) {
   ms.setActionHandler("nexttrack", () => step(1));
   ms.setActionHandler("seekto", (d) => (player.currentTime = d.seekTime));
 }
+
+/* ---------- Service worker killer (tap the 🎵) ---------- */
+$("reset").addEventListener("click", async () => {
+  if (!confirm("Reset app? This unregisters the service worker, clears app caches, and reloads.")) return;
+  try {
+    const regs = await navigator.serviceWorker.getRegistrations();
+    await Promise.all(regs.map((r) => r.unregister()));
+    await Promise.all((await caches.keys()).map((k) => caches.delete(k)));
+  } catch {}
+  location.reload();
+});
 
 /* ---------- Service worker ---------- */
 if ("serviceWorker" in navigator) {
