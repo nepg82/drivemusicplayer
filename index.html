@@ -79,7 +79,7 @@ const player = $("player"), statusEl = $("status"), listEl = $("list"), crumbsEl
 const seek = $("seek"), playPauseBtn = $("playpause");
 
 let tokenClient, accessToken = null, tokenExpiry = 0, pendingToken = null;
-let rootId, folders = {}, path = [];
+let rootId, rootName = "My Drive", chosen = null, folders = {}, path = [];
 let queue = [], currentId = null;
 
 /* ---------- Tiny IndexedDB key/value cache ---------- */
@@ -129,9 +129,10 @@ async function driveFetch(url) {
 }
 
 window.addEventListener("load", async () => {
+  chosen = (await kvGet("chosen")) || null;
   const cached = await kvGet("library");
   if (cached) {
-    rootId = cached.rootId; buildLibrary(cached.all); path = [rootId]; render();
+    rootId = cached.rootId; rootName = cached.rootName || "My Drive"; buildLibrary(cached.all); path = [rootId]; render();
     statusEl.textContent = `Saved library from ${new Date(cached.savedAt).toLocaleString()}. Sign in to refresh.`;
   }
   if (typeof CLIENT_ID === "undefined" || !/^\d+-[\w-]+\.apps\.googleusercontent\.com$/.test(CLIENT_ID)) {
@@ -141,29 +142,64 @@ window.addEventListener("load", async () => {
   tokenClient = google.accounts.oauth2.initTokenClient({ client_id: CLIENT_ID, scope: SCOPE, callback: () => {} });
 });
 $("signin").addEventListener("click", async () => {
-  try { await getToken(); await loadLibrary(); }
+  try { await getToken(); if (chosen) await loadLibrary(); else await showPicker(); }
   catch (e) { statusEl.textContent = "Sign-in failed: " + e.message; }
 });
 
 /* ---------- Library / folders ---------- */
+async function showPicker() {
+  statusEl.textContent = "Choose the folder that holds your music.";
+  crumbsEl.innerHTML = ""; listEl.innerHTML = "";
+  $("progress").classList.add("on");
+  try {
+    const F = "mimeType='application/vnd.google-apps.folder' and trashed=false";
+    const get = async (q) => ((await (await driveFetch(
+      `${API}/files?q=${encodeURIComponent(q)}&fields=files(id,name)&pageSize=1000&orderBy=name`)).json()).files || []);
+    const [mine, shared] = await Promise.all([get(`'root' in parents and ${F}`), get(`sharedWithMe=true and ${F}`)]);
+    const section = (title, items) => {
+      if (!items.length) return;
+      const h = document.createElement("div");
+      h.className = "row"; h.style.cssText = "color:#888;cursor:default;font-size:12px;text-transform:uppercase";
+      h.textContent = title; listEl.appendChild(h);
+      items.forEach((f) => {
+        const row = document.createElement("div"); row.className = "row";
+        row.innerHTML = `<span>📁 ${esc(f.name)}</span>`;
+        row.onclick = async () => { chosen = { id: f.id, name: f.name }; await kvSet("chosen", chosen); path = []; await loadLibrary(); };
+        listEl.appendChild(row);
+      });
+    };
+    section("My Drive", mine); section("Shared with me", shared);
+    if (!listEl.children.length) statusEl.textContent = "No folders found.";
+  } catch (e) { statusEl.textContent = "Error listing folders: " + e.message; }
+  finally { $("progress").classList.remove("on"); }
+}
+
 async function loadLibrary() {
   statusEl.textContent = "Connecting to Drive...";
   $("progress").classList.add("on"); $("signin").disabled = true;
   try {
-    rootId = (await (await driveFetch(`${API}/files/root?fields=id`)).json()).id;
-    const q = encodeURIComponent("(mimeType contains 'audio/' or mimeType='application/vnd.google-apps.folder') and trashed=false");
-    let all = [], pageToken = "";
-    do {
-      const url = `${API}/files?q=${q}&fields=nextPageToken,files(id,name,mimeType,parents)&pageSize=1000` +
-                  (pageToken ? `&pageToken=${pageToken}` : "");
-      const data = await (await driveFetch(url)).json();
-      all = all.concat(data.files || []);
-      statusEl.textContent = `Fetching your library... ${all.length.toLocaleString()} items found`;
-      pageToken = data.nextPageToken || "";
-    } while (pageToken);
+    if (!chosen) throw new Error("No folder selected");
+    rootId = chosen.id; rootName = chosen.name;
+    const KIND = "(mimeType contains 'audio/' or mimeType='application/vnd.google-apps.folder') and trashed=false";
+    let all = [], queue = [rootId];
+    while (queue.length) {
+      const batch = queue.splice(0, 30); // query up to 30 folders per request
+      const q = encodeURIComponent(`(${batch.map((id) => `'${id}' in parents`).join(" or ")}) and ${KIND}`);
+      let pageToken = "";
+      do {
+        const url = `${API}/files?q=${q}&fields=nextPageToken,files(id,name,mimeType,parents)&pageSize=1000` +
+                    (pageToken ? `&pageToken=${pageToken}` : "");
+        const files = (await (await driveFetch(url)).json());
+        const list = files.files || [];
+        all = all.concat(list);
+        list.filter((f) => f.mimeType === "application/vnd.google-apps.folder").forEach((f) => queue.push(f.id));
+        statusEl.textContent = `Scanning "${rootName}"... ${all.length.toLocaleString()} items found`;
+        pageToken = files.nextPageToken || "";
+      } while (pageToken);
+    }
 
     statusEl.textContent = "Building folders...";
-    await kvSet("library", { rootId, all, savedAt: Date.now() });
+    await kvSet("library", { rootId, rootName, all, savedAt: Date.now() });
     const keep = path.slice();
     buildLibrary(all);
     path = keep.length && keep.every((id) => folders[id]) ? keep : [rootId];
@@ -176,7 +212,7 @@ async function loadLibrary() {
 
 function buildLibrary(all) {
     folders = {
-      [rootId]: { id: rootId, name: "My Drive", kids: [], files: [] },
+      [rootId]: { id: rootId, name: rootName, kids: [], files: [] },
       [OTHER]: { id: OTHER, name: "Shared / other", kids: [], files: [] },
     };
     const isFolder = (f) => f.mimeType === "application/vnd.google-apps.folder";
@@ -202,6 +238,11 @@ function render() {
   }
   const t = document.createElement("span"); t.textContent = path.map((id) => folders[id].name).join(" / ");
   crumbsEl.appendChild(t);
+  if (path.length === 1) {
+    const c = document.createElement("button"); c.textContent = "Change folder";
+    c.onclick = async () => { try { await getToken(); await showPicker(); } catch (e) { statusEl.textContent = "Sign-in needed: " + e.message; } };
+    crumbsEl.appendChild(c);
+  }
 
   listEl.innerHTML = "";
   cur.kids.map((id) => folders[id]).filter((f) => count(f.id) > 0).sort(byName).forEach((f) => {
