@@ -59,10 +59,9 @@
 <audio id="player"></audio>
 
 <script src="https://accounts.google.com/gsi/client" async defer></script>
+<script src="config.js"></script>
 <script>
-// ====== CONFIGURE THIS ======
-const CLIENT_ID = "Y731562365482-55ee1l0v6f8qe5n8t05v2cruqqa4h6ee.apps.googleusercontent.com";
-// =============================
+// CLIENT_ID comes from config.js
 
 const API = "https://www.googleapis.com/drive/v3";
 const SCOPE = "https://www.googleapis.com/auth/drive.readonly";
@@ -128,6 +127,10 @@ window.addEventListener("load", async () => {
   if (cached) {
     rootId = cached.rootId; buildLibrary(cached.all); path = [rootId]; render();
     statusEl.textContent = `Saved library from ${new Date(cached.savedAt).toLocaleString()}. Sign in to refresh.`;
+  }
+  if (typeof CLIENT_ID === "undefined" || !/^\d+-[\w-]+\.apps\.googleusercontent\.com$/.test(CLIENT_ID)) {
+    statusEl.textContent = "Check config.js: CLIENT_ID is missing or malformed (stray characters or leftover placeholder?).";
+    return;
   }
   tokenClient = google.accounts.oauth2.initTokenClient({ client_id: CLIENT_ID, scope: SCOPE, callback: () => {} });
 });

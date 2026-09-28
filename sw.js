@@ -1,5 +1,5 @@
-const CACHE = "drive-music-shell-v2.0.4";
-const SHELL = ["./", "./index.html", "./manifest.json", "./icon.svg"];
+const CACHE = "drive-music-shell-v2.0.5";
+const SHELL = ["./", "./index.html", "./config.js", "./manifest.json", "./icon.svg"];
 
 self.addEventListener("install", (e) => {
   e.waitUntil(caches.open(CACHE).then((c) => c.addAll(SHELL)));
