@@ -243,7 +243,10 @@ $("prev").onclick = () => step(-1);
 player.addEventListener("play", () => (playPauseBtn.textContent = "⏸"));
 player.addEventListener("pause", () => (playPauseBtn.textContent = "▶️"));
 player.addEventListener("ended", () => step(1));
-player.addEventListener("error", () => ($("nowplaying").textContent = "Playback error (try another track)"));
+player.addEventListener("error", () => {
+  const c = player.error ? player.error.code : "?";
+  $("nowplaying").textContent = `Playback error (code ${c}): ${player.error && player.error.message || "unknown"}`;
+});
 
 let scrubbing = false;
 seek.addEventListener("input", () => { scrubbing = true; $("cur").textContent = fmt((seek.value / 1000) * player.duration); });

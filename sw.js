@@ -1,4 +1,4 @@
-const CACHE = "drive-music-shell-v2.0.2";
+const CACHE = "drive-music-shell-v2.0.3";
 const SHELL = ["./", "./index.html", "./manifest.json", "./icon.svg"];
 
 self.addEventListener("install", (e) => {
@@ -24,6 +24,18 @@ async function askToken(clientId) {
   });
 }
 
+// Drive's Content-Range header isn't readable cross-origin, so we rebuild it from the file size
+const sizes = new Map();
+async function fileSize(id, token) {
+  if (sizes.has(id)) return sizes.get(id);
+  const r = await fetch(`https://www.googleapis.com/drive/v3/files/${id}?fields=size`, {
+    headers: { Authorization: `Bearer ${token}` },
+  });
+  const size = r.ok ? Number((await r.json()).size) : NaN;
+  if (size) sizes.set(id, size);
+  return size;
+}
+
 // Proxy /drive-stream/<fileId> to Drive, adding auth and forwarding Range requests
 async function stream(e, id, type) {
   const token = await askToken(e.clientId);
@@ -31,9 +43,16 @@ async function stream(e, id, type) {
   const headers = { Authorization: `Bearer ${token}` };
   const range = e.request.headers.get("Range");
   if (range) headers.Range = range;
-  const r = await fetch(`https://www.googleapis.com/drive/v3/files/${id}?alt=media`, { headers });
+  const r0 = fetch(`https://www.googleapis.com/drive/v3/files/${id}?alt=media`, { headers });
+  const [r, total] = await Promise.all([r0, fileSize(id, token)]);
   const out = new Headers({ "Content-Type": type, "Accept-Ranges": "bytes" });
-  for (const k of ["Content-Length", "Content-Range"]) if (r.headers.get(k)) out.set(k, r.headers.get(k));
+  const len = r.headers.get("Content-Length");
+  if (len) out.set("Content-Length", len);
+  if (r.status === 206) {
+    const start = Number(/bytes=(\d+)-/.exec(range || "")?.[1] ?? 0);
+    const cr = r.headers.get("Content-Range") || (total && len ? `bytes ${start}-${start + Number(len) - 1}/${total}` : null);
+    if (cr) out.set("Content-Range", cr);
+  }
   return new Response(r.body, { status: r.status, headers: out });
 }
 
