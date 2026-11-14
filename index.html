@@ -35,6 +35,8 @@
   #seek { flex:1; accent-color:#1db954; }
   #controls { display:flex; justify-content:center; gap:20px; }
   button.ctrl { background:none; border:none; color:#eee; font-size:22px; cursor:pointer; padding:2px 8px; }
+  .chk { accent-color:#1db954; width:18px; height:18px; flex:none; margin:0; cursor:pointer; }
+  .row.off span { opacity:.45; }
 </style>
 </head>
 <body>
@@ -81,6 +83,8 @@ const seek = $("seek"), playPauseBtn = $("playpause");
 let tokenClient, accessToken = null, tokenExpiry = 0, pendingToken = null;
 let rootId, rootName = "My Drive", chosen = null, folders = {}, path = [];
 let queue = [], currentId = null;
+let unchecked = new Set(); // IDs of tracks excluded from playback
+const saveUnchecked = () => kvSet("unchecked", [...unchecked]);
 
 /* ---------- Tiny IndexedDB key/value cache ---------- */
 const openDB = () => new Promise((res, rej) => {
@@ -129,6 +133,7 @@ async function driveFetch(url) {
 }
 
 window.addEventListener("load", async () => {
+  unchecked = new Set((await kvGet("unchecked")) || []);
   chosen = (await kvGet("chosen")) || null;
   const cached = await kvGet("library");
   if (cached) {
@@ -243,6 +248,17 @@ function render() {
     c.onclick = async () => { try { await getToken(); await showPicker(); } catch (e) { statusEl.textContent = "Sign-in needed: " + e.message; } };
     crumbsEl.appendChild(c);
   }
+  
+  if (cur.files.length) {
+    const t2 = document.createElement("button");
+    const anyOff = cur.files.some((f) => unchecked.has(f.id));
+    t2.textContent = anyOff ? "Check all" : "Uncheck all";
+    t2.onclick = () => {
+      cur.files.forEach((f) => (anyOff ? unchecked.delete(f.id) : unchecked.add(f.id)));
+      saveUnchecked(); render();
+    };
+    crumbsEl.appendChild(t2);
+  }
 
   listEl.innerHTML = "";
   cur.kids.map((id) => folders[id]).filter((f) => count(f.id) > 0).sort(byName).forEach((f) => {
@@ -253,8 +269,16 @@ function render() {
   });
   [...cur.files].sort(byName).forEach((f) => {
     const row = document.createElement("div");
-    row.className = "row" + (f.id === currentId ? " active" : ""); row.dataset.id = f.id;
-    row.innerHTML = `<span>${esc(f.name)}</span>`;
+    row.className = "row" + (f.id === currentId ? " active" : "") + (unchecked.has(f.id) ? " off" : "");
+    row.dataset.id = f.id;
+    row.innerHTML = `<input type="checkbox" class="chk" ${unchecked.has(f.id) ? "" : "checked"}><span>${esc(f.name)}</span>`;
+    const chk = row.querySelector(".chk");
+    chk.onclick = (e) => e.stopPropagation();           // don't start playback
+    chk.onchange = () => {
+      chk.checked ? unchecked.delete(f.id) : unchecked.add(f.id);
+      row.classList.toggle("off", !chk.checked);
+      saveUnchecked();
+    };
     row.onclick = () => { queue = [...cur.files].sort(byName); playTrack(f); };
     listEl.appendChild(row);
   });
@@ -286,8 +310,11 @@ async function playTrack(f) {
   } catch (e) { $("nowplaying").textContent = "Error: " + e.message; }
 }
 function step(d) {
-  const i = queue.findIndex((f) => f.id === currentId);
-  if (i >= 0 && queue[i + d]) playTrack(queue[i + d]);
+  let i = queue.findIndex((f) => f.id === currentId);
+  if (i < 0) return;
+  for (i += d; queue[i]; i += d) {
+    if (!unchecked.has(queue[i].id)) { playTrack(queue[i]); return; }
+  }
 }
 const fmt = (s) => (isFinite(s) ? `${Math.floor(s / 60)}:${String(Math.floor(s % 60)).padStart(2, "0")}` : "0:00");
 
